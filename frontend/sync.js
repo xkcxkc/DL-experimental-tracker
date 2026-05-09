@@ -24,7 +24,7 @@ const Sync = {
         }, this._PULL_INTERVAL);
     },
 
-    // 初始化：remote 模式下首次拉取
+    // 初始化：remote 模式下首次拉取（不再定时拉取，避免覆盖本地数据）
     async init() {
         if (StorageAdapter._mode !== 'remote') return;
         try {
@@ -32,7 +32,6 @@ const Sync = {
         } catch (e) {
             console.warn('首次同步失败，使用本地缓存:', e.message);
         }
-        this.startPull();
     },
 
     // 停止同步
