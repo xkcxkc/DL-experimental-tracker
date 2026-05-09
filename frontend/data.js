@@ -389,7 +389,7 @@ const StorageAdapter = {
         }
     },
 
-    // 从服务器拉取
+    // 从服务器拉取（只在服务器数据更多时覆盖）
     async pullFromServer() {
         if (this._mode !== 'remote') return;
         try {
@@ -397,11 +397,15 @@ const StorageAdapter = {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const serverState = await res.json();
             if (serverState && typeof serverState === 'object' && Object.keys(serverState).length > 0) {
-                this._setState(serverState);
-                Data.refresh();
-                // 如果 app 已初始化，刷新当前视图
-                if (typeof app !== 'undefined' && app.currentView) {
-                    app.navigate(app.currentView);
+                // 比较服务器和本地数据量，只在服务器数据更多时覆盖
+                const localExps = JSON.parse(localStorage.getItem(DB.KEYS.EXPERIMENTS) || '[]');
+                const serverExps = serverState.EXPERIMENTS || [];
+                if (serverExps.length >= localExps.length) {
+                    this._setState(serverState);
+                    Data.refresh();
+                    if (typeof app !== 'undefined' && app.currentView) {
+                        app.navigate(app.currentView);
+                    }
                 }
                 this._lastPull = Date.now();
             }
