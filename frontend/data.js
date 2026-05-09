@@ -93,9 +93,9 @@ const DB = {
 
     // ==================== Experiments ====================
     getExperiments(modelId) {
-        return this._getAll(this.KEYS.EXPERIMENTS)
-            .filter(exp => exp.modelId === modelId)
-            .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+        let exps = this._getAll(this.KEYS.EXPERIMENTS);
+        if (modelId !== undefined) exps = exps.filter(exp => exp.modelId === modelId);
+        return exps.sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
     },
 
     getExperiment(id) {
