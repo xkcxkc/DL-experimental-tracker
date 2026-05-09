@@ -469,6 +469,11 @@ const CSVParser = {
             if (idx >= 0) {
                 headerIdx = idx;
                 headerLine = preDetectedHeader;
+            } else {
+                // Header was sliced off — prepend it back
+                lines.unshift(preDetectedHeader);
+                headerIdx = 0;
+                headerLine = preDetectedHeader;
             }
         }
 
