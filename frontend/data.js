@@ -389,7 +389,21 @@ const StorageAdapter = {
         }
     },
 
-    // 从服务器拉取（只在服务器数据更多时覆盖）
+    // 合并服务器数据到本地（以本地为准，只补充服务器有而本地没有的）
+    _mergeState(serverState) {
+        for (const [name, key] of Object.entries(DB.KEYS)) {
+            const serverItems = serverState[name];
+            if (!Array.isArray(serverItems) || serverItems.length === 0) continue;
+            const localItems = JSON.parse(localStorage.getItem(key) || '[]');
+            const localIds = new Set(localItems.map(i => i.id));
+            const missing = serverItems.filter(i => !localIds.has(i.id));
+            if (missing.length > 0) {
+                localStorage.setItem(key, JSON.stringify([...localItems, ...missing]));
+            }
+        }
+    },
+
+    // 从服务器拉取（合并模式，不覆盖本地数据）
     async pullFromServer() {
         if (this._mode !== 'remote') return;
         try {
@@ -397,15 +411,10 @@ const StorageAdapter = {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const serverState = await res.json();
             if (serverState && typeof serverState === 'object' && Object.keys(serverState).length > 0) {
-                // 比较服务器和本地数据量，只在服务器数据更多时覆盖
-                const localExps = JSON.parse(localStorage.getItem(DB.KEYS.EXPERIMENTS) || '[]');
-                const serverExps = serverState.EXPERIMENTS || [];
-                if (serverExps.length >= localExps.length) {
-                    this._setState(serverState);
-                    Data.refresh();
-                    if (typeof app !== 'undefined' && app.currentView) {
-                        app.navigate(app.currentView);
-                    }
+                this._mergeState(serverState);
+                Data.refresh();
+                if (typeof app !== 'undefined' && app.currentView) {
+                    app.navigate(app.currentView);
                 }
                 this._lastPull = Date.now();
             }
