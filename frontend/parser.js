@@ -163,9 +163,9 @@ const CSVParser = {
 
     standardizeColumn(col) {
         const lower = col.toLowerCase().trim()
-            .replace(/\s+/g, '_')     // spaces to underscores
-            .replace(/\(/g, '(')       // normalize parens
-            .replace(/\)/g, ')');
+            .replace(/\s*\(\s*/g, '(')   // normalize parens (remove spaces around them)
+            .replace(/\s*\)\s*/g, ')')
+            .replace(/\s+/g, '_');       // spaces to underscores
         
         const aliases = this._getColumnAliases();
         
