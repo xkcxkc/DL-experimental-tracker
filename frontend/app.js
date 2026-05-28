@@ -622,6 +622,17 @@ class ExperimentTracker {
         }
     }
 
+    _calcBinaryMetrics(cm) {
+        if (!cm || !cm.labels || !cm.matrix || cm.labels.length !== 2) return null;
+        const m = cm.matrix;
+        const TP = m[1][1], FN = m[1][0], FP = m[0][1];
+        const precision = (TP + FP) > 0 ? TP / (TP + FP) : null;
+        const recall = (TP + FN) > 0 ? TP / (TP + FN) : null;
+        const f1 = (precision !== null && recall !== null && (precision + recall) > 0)
+            ? 2 * precision * recall / (precision + recall) : null;
+        return { precision, recall, f1 };
+    }
+
     _renderTestTab(experimentId, exp) {
         const detail = exp.testResultDetail || null;
         const testResults = exp.testResults || [];
@@ -638,6 +649,14 @@ class ExperimentTracker {
                 { icon: '⚡', label: 'Avg Inference', value: s.avgInferenceTime != null ? s.avgInferenceTime : '--' },
                 { icon: '📉', label: 'Test Loss', value: s.testLoss != null ? s.testLoss : '--' }
             ];
+            // 二分类指标（PR/RC/F1）
+            const binary = this._calcBinaryMetrics(detail.confusionMatrix);
+            if (binary) {
+                const fmt = v => v != null ? (v * 100).toFixed(2) + '%' : '--';
+                metrics.push({ icon: '📊', label: 'Precision', value: fmt(binary.precision) });
+                metrics.push({ icon: '📈', label: 'Recall', value: fmt(binary.recall) });
+                metrics.push({ icon: '🏆', label: 'F1 Score', value: fmt(binary.f1) });
+            }
             html += `<div class="metrics-grid" style="margin-bottom:20px;">
                 ${metrics.map(m => `<div class="metric-card"><div class="metric-icon">${m.icon}</div><div class="metric-title">${m.label}</div><div class="metric-number">${m.value}</div></div>`).join('')}
             </div>`;
@@ -1195,7 +1214,16 @@ class ExperimentTracker {
             { label: 'Avg Inference', value: summary.avgInferenceTime != null ? summary.avgInferenceTime : '--' },
             { label: 'Test Loss', value: summary.testLoss != null ? summary.testLoss : '--' }
         ];
-        let summaryHtml = `<div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:16px;">
+        // 二分类指标
+        const binary = this._calcBinaryMetrics(cm);
+        if (binary) {
+            const fmt = v => v != null ? (v * 100).toFixed(2) + '%' : '--';
+            metrics.push({ label: 'Precision', value: fmt(binary.precision) });
+            metrics.push({ label: 'Recall', value: fmt(binary.recall) });
+            metrics.push({ label: 'F1 Score', value: fmt(binary.f1) });
+        }
+        const cols = metrics.length <= 4 ? 4 : metrics.length;
+        let summaryHtml = `<div style="display:grid; grid-template-columns:repeat(${cols},1fr); gap:8px; margin-bottom:16px;">
             ${metrics.map(m => `<div style="background:var(--card-bg,#f8f9fa); padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:12px; color:var(--text-muted);">${m.label}</div>
                 <div style="font-size:18px; font-weight:700;">${m.value}</div>
