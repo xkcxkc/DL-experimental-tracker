@@ -1641,7 +1641,7 @@ class ExperimentTracker {
                     <div class="modal-body">
                         <p>📊 <strong>${modelCount}</strong> 个项目，<strong>${expCount}</strong> 个实验</p>
                         <p>💾 数据大小：<strong>${sizeStr}</strong></p>
-                        <p style="font-size: 0.9rem; color: var(--text-muted);">数据存储在浏览器 localStorage 中，清除浏览器数据会丢失。建议定期导出备份。</p>
+                        <p style="font-size: 0.9rem; color: var(--text-muted);">数据存储在服务器端，多设备自动同步。建议定期导出备份以防万一。</p>
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-primary" onclick="app.exportAll()">📦 导出全部</button>

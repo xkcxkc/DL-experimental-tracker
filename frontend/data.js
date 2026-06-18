@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Data Layer - LocalStorage based data management
 // ============================================================
 
@@ -22,6 +22,9 @@ const DB = {
 
     // Generic CRUD
     _getAll(key) {
+        if (StorageAdapter._mode === 'remote') {
+            return StorageAdapter._cache[key] || [];
+        }
         try {
             return JSON.parse(localStorage.getItem(key)) || [];
         } catch {
@@ -30,11 +33,12 @@ const DB = {
     },
 
     _saveAll(key, data) {
-        localStorage.setItem(key, JSON.stringify(data));
-        // remote 模式下触发同步
-        if (typeof StorageAdapter !== 'undefined' && StorageAdapter._mode === 'remote') {
+        if (StorageAdapter._mode === 'remote') {
+            StorageAdapter._cache[key] = data;
             Sync.debounceSave();
+            return;
         }
+        localStorage.setItem(key, JSON.stringify(data));
     },
 
     _getById(key, id) {
@@ -344,16 +348,24 @@ const DB = {
 // ============================================================
 const StorageAdapter = {
     _mode: 'local',
+    _cache: {},
     _apiUrl: '/api/data',
     _lastPull: 0,
 
     init() {
-        const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-        this._mode = isLocal ? 'local' : 'remote';
+        // 始终使用远程模式，数据存储在服务器端
+        this._mode = 'remote';
     },
 
     // 从 localStorage 读取全量状态
     _getState() {
+        if (this._mode === 'remote') {
+            const state = {};
+            for (const [name, key] of Object.entries(DB.KEYS)) {
+                state[name] = this._cache[key] || [];
+            }
+            return state;
+        }
         const state = {};
         for (const [name, key] of Object.entries(DB.KEYS)) {
             try {
@@ -369,20 +381,40 @@ const StorageAdapter = {
     _setState(state) {
         for (const [name, key] of Object.entries(DB.KEYS)) {
             if (state[name] !== undefined) {
-                localStorage.setItem(key, JSON.stringify(state[name]));
+                if (this._mode === 'remote') {
+                    this._cache[key] = state[name];
+                } else {
+                    localStorage.setItem(key, JSON.stringify(state[name]));
+                }
             }
         }
+    },
+
+    // 前端缓存 key → 服务器 key 映射
+    _SERVER_KEYS: null,
+    _getServerKeys() {
+        if (this._SERVER_KEYS) return this._SERVER_KEYS;
+        this._SERVER_KEYS = {};
+        for (const [serverKey, frontendKey] of Object.entries(DB.KEYS)) {
+            this._SERVER_KEYS[frontendKey] = serverKey;
+        }
+        return this._SERVER_KEYS;
     },
 
     // 推送到服务器
     async pushToServer() {
         if (this._mode !== 'remote') return;
         try {
-            const state = this._getState();
+            // 从缓存读取，转换为服务器格式
+            const serverData = {};
+            const serverKeys = this._getServerKeys();
+            for (const [frontendKey, serverKey] of Object.entries(serverKeys)) {
+                serverData[serverKey] = this._cache[frontendKey] || [];
+            }
             await fetch(this._apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(state)
+                body: JSON.stringify(serverData)
             });
         } catch (e) {
             console.warn('推送失败:', e.message);
@@ -394,11 +426,18 @@ const StorageAdapter = {
         for (const [name, key] of Object.entries(DB.KEYS)) {
             const serverItems = serverState[name];
             if (!Array.isArray(serverItems) || serverItems.length === 0) continue;
-            const localItems = JSON.parse(localStorage.getItem(key) || '[]');
+            const localItems = this._mode === 'remote'
+                ? (this._cache[key] || [])
+                : JSON.parse(localStorage.getItem(key) || '[]');
             const localIds = new Set(localItems.map(i => i.id));
             const missing = serverItems.filter(i => !localIds.has(i.id));
             if (missing.length > 0) {
-                localStorage.setItem(key, JSON.stringify([...localItems, ...missing]));
+                const merged = [...localItems, ...missing];
+                if (this._mode === 'remote') {
+                    this._cache[key] = merged;
+                } else {
+                    localStorage.setItem(key, JSON.stringify(merged));
+                }
             }
         }
     },
@@ -411,10 +450,19 @@ const StorageAdapter = {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const serverState = await res.json();
             if (serverState && typeof serverState === 'object' && Object.keys(serverState).length > 0) {
-                this._mergeState(serverState);
-                Data.refresh();
-                if (typeof app !== 'undefined' && app.currentView) {
-                    app.navigate(app.currentView);
+                // 将服务器键名（MODELS/EXPERIMENTS 等）转换为前端格式（dlt_models 等）
+                const frontendState = {};
+                for (const [frontendKey, serverKey] of Object.entries(DB.KEYS)) {
+                    if (serverState[frontendKey] !== undefined) {
+                        frontendState[serverKey] = serverState[frontendKey];
+                    }
+                }
+                if (Object.keys(frontendState).length > 0) {
+                    this._mergeState(frontendState);
+                    Data.refresh();
+                    if (typeof app !== 'undefined' && app.currentView) {
+                        app.navigate(app.currentView);
+                    }
                 }
                 this._lastPull = Date.now();
             }
@@ -512,12 +560,23 @@ const Data = {
 
     importAll(data) {
         if (data.models) {
-            localStorage.setItem(DB.KEYS.MODELS, JSON.stringify(data.models));
+            if (StorageAdapter._mode === 'remote') {
+                StorageAdapter._cache[DB.KEYS.MODELS] = data.models;
+            } else {
+                localStorage.setItem(DB.KEYS.MODELS, JSON.stringify(data.models));
+            }
         }
         if (data.experiments) {
-            localStorage.setItem(DB.KEYS.EXPERIMENTS, JSON.stringify(data.experiments));
+            if (StorageAdapter._mode === 'remote') {
+                StorageAdapter._cache[DB.KEYS.EXPERIMENTS] = data.experiments;
+            } else {
+                localStorage.setItem(DB.KEYS.EXPERIMENTS, JSON.stringify(data.experiments));
+            }
         }
         this.refresh();
+        if (StorageAdapter._mode === 'remote') {
+            Sync.debounceSave();
+        }
     },
 
     getAllTags() { return DB.getAllTags(); },
