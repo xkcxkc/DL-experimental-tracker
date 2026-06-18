@@ -35,6 +35,8 @@ const DB = {
     _saveAll(key, data) {
         if (StorageAdapter._mode === 'remote') {
             StorageAdapter._cache[key] = data;
+            // 同时写入 localStorage 作为本地缓存，防止刷新丢失
+            try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
             Sync.debounceSave();
             return;
         }
@@ -554,23 +556,26 @@ const Data = {
     exportAll() {
         return {
             models: DB.getModels(),
-            experiments: DB._getAll(DB.KEYS.EXPERIMENTS)
+            experiments: DB._getAll(DB.KEYS.EXPERIMENTS),
+            hyperparams: DB._getAll(DB.KEYS.HYPERPARAMS),
+            trainingLogs: DB._getAll(DB.KEYS.TRAINING_LOGS),
+            testResults: DB._getAll(DB.KEYS.TEST_RESULTS)
         };
     },
 
     importAll(data) {
-        if (data.models) {
-            if (StorageAdapter._mode === 'remote') {
-                StorageAdapter._cache[DB.KEYS.MODELS] = data.models;
-            } else {
-                localStorage.setItem(DB.KEYS.MODELS, JSON.stringify(data.models));
-            }
-        }
-        if (data.experiments) {
-            if (StorageAdapter._mode === 'remote') {
-                StorageAdapter._cache[DB.KEYS.EXPERIMENTS] = data.experiments;
-            } else {
-                localStorage.setItem(DB.KEYS.EXPERIMENTS, JSON.stringify(data.experiments));
+        // 支持旧格式（只有 models/experiments）和新格式（包含所有数据）
+        const fieldMap = {
+            models: DB.KEYS.MODELS,
+            experiments: DB.KEYS.EXPERIMENTS,
+            hyperparams: DB.KEYS.HYPERPARAMS,
+            trainingLogs: DB.KEYS.TRAINING_LOGS,
+            testResults: DB.KEYS.TEST_RESULTS
+        };
+        for (const [field, cacheKey] of Object.entries(fieldMap)) {
+            if (data[field] && Array.isArray(data[field])) {
+                StorageAdapter._cache[cacheKey] = data[field];
+                try { localStorage.setItem(cacheKey, JSON.stringify(data[field])); } catch (e) {}
             }
         }
         this.refresh();
@@ -586,6 +591,15 @@ const Data = {
 
 // ==================== 初始化 ====================
 StorageAdapter.init();
+// 先从 localStorage 恢复缓存（防止刷新丢失数据）
+for (const key of Object.values(DB.KEYS)) {
+    try {
+        const cached = JSON.parse(localStorage.getItem(key));
+        if (Array.isArray(cached) && cached.length > 0) {
+            StorageAdapter._cache[key] = cached;
+        }
+    } catch (e) {}
+}
 Data.refresh();
 // remote 模式下异步拉取服务器数据（不阻塞首屏渲染）
 if (StorageAdapter._mode === 'remote') {
