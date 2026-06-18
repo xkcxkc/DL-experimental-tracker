@@ -267,6 +267,27 @@ const CSVParser = {
         return this.isSeparator(line) && /训练数据|数据|train.*data|data/i.test(line);
     },
 
+    _isTestPredictionHeader(line) {
+        const fields = this.splitCSVLine(line).map(f => f.toLowerCase().trim());
+        const hasFile = fields.some(f => /file|path|image|img/.test(f));
+        const hasActual = fields.some(f => /actual|true|real|ground/.test(f));
+        const hasPredict = fields.some(f => /predict|pred|output/.test(f));
+        const hasConfidence = fields.some(f => /conf|score|prob/.test(f));
+        return hasFile && hasActual && hasPredict && (hasConfidence || fields.length >= 3);
+    },
+
+    _looksLikeTestResultFile(lines) {
+        const hasTrainingSection = lines.some(line => this._isTrainingDataHeader(line));
+        if (hasTrainingSection) return false;
+
+        const scanLimit = Math.min(lines.length, 10);
+        for (let i = 0; i < scanLimit; i++) {
+            if (this._isTestPredictionHeader(lines[i])) return true;
+        }
+
+        return lines.some(line => /test\s*summary|confusion\s*matrix|测试汇总|混淆矩阵/i.test(line));
+    },
+
     /**
      * Detect if a line looks like a CSV column header (contains letters in most fields)
      */
@@ -309,6 +330,11 @@ const CSVParser = {
         
         if (lines.length === 0) {
             return { success: false, error: '文件为空' };
+        }
+
+        // 测试结果 CSV 中的 0/1 标签会让预测行看起来“多数为数字”，这里先排除。
+        if (this._looksLikeTestResultFile(lines)) {
+            return { success: false, error: '检测到测试结果 CSV，不按训练日志解析' };
         }
 
         // ---- Phase 1: Detect sections ----
@@ -636,6 +662,20 @@ const CSVParser = {
                 lines.slice(sections.matrix.startIdx, sections.matrix.endIdx)
             );
         }
+        if (!result.confusionMatrix && result.predictions.length > 0) {
+            result.confusionMatrix = this._calculateConfusionMatrixFromPredictions(result.predictions);
+        }
+
+        const hasSummary = result.summary && Object.keys(result.summary).length > 0;
+        const hasPredictions = result.predictions.length > 0;
+        const hasMatrix = !!result.confusionMatrix;
+        if (!hasSummary && !hasPredictions && !hasMatrix) {
+            return {
+                success: false,
+                error: '未找到有效的测试结果数据',
+                rawPreview: lines.slice(0, 15).join('\n')
+            };
+        }
 
         return {
             success: true,
@@ -773,6 +813,34 @@ const CSVParser = {
             avgInferenceTime: null,
             testLoss: null
         };
+    },
+
+    _calculateConfusionMatrixFromPredictions(predictions) {
+        const labelSet = new Set();
+        for (const pred of predictions) {
+            if (pred.actualLabel !== undefined && pred.actualLabel !== null && pred.actualLabel !== '') {
+                labelSet.add(String(pred.actualLabel));
+            }
+            if (pred.predictLabel !== undefined && pred.predictLabel !== null && pred.predictLabel !== '') {
+                labelSet.add(String(pred.predictLabel));
+            }
+        }
+
+        const labels = [...labelSet].sort((a, b) =>
+            a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        if (labels.length === 0) return null;
+
+        const indexByLabel = new Map(labels.map((label, idx) => [label, idx]));
+        const matrix = labels.map(() => labels.map(() => 0));
+        for (const pred of predictions) {
+            const actualIdx = indexByLabel.get(String(pred.actualLabel));
+            const predictIdx = indexByLabel.get(String(pred.predictLabel));
+            if (actualIdx === undefined || predictIdx === undefined) continue;
+            matrix[actualIdx][predictIdx]++;
+        }
+
+        return { labels, matrix };
     },
 
     _parseConfusionMatrix(lines) {

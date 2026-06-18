@@ -793,6 +793,28 @@ class ExperimentTracker {
         if (panel) panel.style.display = 'block';
     }
 
+    _isStorageQuotaError(err) {
+        const name = err?.name || '';
+        const message = err?.message || '';
+        return name === 'QuotaExceededError'
+            || name === 'NS_ERROR_DOM_QUOTA_REACHED'
+            || /quota|exceeded|storage/i.test(message);
+    }
+
+    _saveExperimentUpdate(experimentId, updates, context = '保存失败') {
+        try {
+            Data.updateExperiment(experimentId, updates);
+            return true;
+        } catch (err) {
+            console.error(context, err);
+            const message = this._isStorageQuotaError(err)
+                ? `${context}：浏览器存储空间不足，请先导出备份并清理旧记录后再导入。`
+                : `${context}：${err?.message || err}`;
+            this.showToast(message, 'error');
+            return false;
+        }
+    }
+
     // ==================== CRUD ====================
     addModel() {
         const nameInput = document.getElementById('new-model-name');
@@ -1298,7 +1320,7 @@ class ExperimentTracker {
                 if (parsed.summary.testAcc != null) results.push({ metric: 'Test Accuracy', value: parsed.summary.testAcc + '%', notes: '自动计算' });
                 if (parsed.summary.mAP != null) results.push({ metric: 'mAP', value: parsed.summary.mAP, notes: '' });
             }
-            Data.updateExperiment(experimentId, { testResultDetail: detail, testResults: results });
+            if (!this._saveExperimentUpdate(experimentId, { testResultDetail: detail, testResults: results }, '测试结果保存失败')) return;
             this.showToast('测试结果导入成功');
             this.renderExperiment(experimentId);
             this.switchTab('test');
@@ -1495,7 +1517,7 @@ class ExperimentTracker {
             const results = [];
             if (testSummary.testAcc != null) results.push({ metric: 'Test Accuracy', value: testSummary.testAcc + '%', notes: '自动计算' });
             if (testSummary.mAP != null) results.push({ metric: 'mAP', value: testSummary.mAP, notes: '' });
-            Data.updateExperiment(expId, { testResultDetail: detail, testResults: results });
+            if (!this._saveExperimentUpdate(expId, { testResultDetail: detail, testResults: results }, '测试结果保存失败')) return;
         }
 
         this.showToast(`已导入实验：${expName}`);
@@ -1535,7 +1557,7 @@ class ExperimentTracker {
                 if (parsedTest.summary.testAcc != null) results.push({ metric: 'Test Accuracy', value: parsedTest.summary.testAcc + '%', notes: '自动计算' });
                 if (parsedTest.summary.mAP != null) results.push({ metric: 'mAP', value: parsedTest.summary.mAP, notes: '' });
             }
-            Data.updateExperiment(expId, { testResultDetail: detail, testResults: results });
+            if (!this._saveExperimentUpdate(expId, { testResultDetail: detail, testResults: results }, '测试结果保存失败')) return;
             imported.push(`测试结果 ${(parsedTest.predictions || []).length} 条`);
         }
 
