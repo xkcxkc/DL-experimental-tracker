@@ -1,11 +1,11 @@
-# HTTP 跳转到 HTTPS
+# Redirect HTTP to HTTPS.
 server {
     listen 80;
     server_name ${TRACKER_DOMAIN};
     return 301 https://$host:${TRACKER_HTTPS_PORT}$request_uri;
 }
 
-# HTTPS
+# HTTPS site.
 server {
     listen 8443 ssl;
     server_name ${TRACKER_DOMAIN};
@@ -16,14 +16,18 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
-    # 静态文件
+    # Access control. The password file must live on the VPS only.
+    auth_basic "DL Experiment Tracker";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # Static frontend.
     location / {
         root /usr/share/nginx/html;
         index index.html;
         try_files $uri $uri/ /index.html;
     }
 
-    # API 反向代理
+    # API proxy.
     location /api/ {
         proxy_pass http://server:3000;
         proxy_set_header Host $host;

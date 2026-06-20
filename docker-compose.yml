@@ -17,6 +17,7 @@ services:
       - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro
       - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      - ${NGINX_HTPASSWD_FILE:?Set NGINX_HTPASSWD_FILE to a local htpasswd file}:/etc/nginx/.htpasswd:ro
     depends_on:
       - server
     restart: always

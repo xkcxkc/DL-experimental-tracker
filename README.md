@@ -82,6 +82,20 @@ TRACKER_DOMAIN=your-domain.example.com
 TRACKER_HTTP_PORT=80
 TRACKER_HTTPS_PORT=8443
 LETSENCRYPT_DIR=/etc/letsencrypt
+NGINX_HTPASSWD_FILE=./secrets/.htpasswd
+```
+
+创建访问密码文件。这个文件只放在 VPS，不提交到 GitHub：
+
+```bash
+mkdir -p secrets
+openssl passwd -apr1
+```
+
+复制输出的哈希值，写入 `secrets/.htpasswd`，格式如下：
+
+```text
+admin:这里替换为openssl输出的哈希值
 ```
 
 启动服务：
@@ -96,6 +110,18 @@ docker compose up -d --build
 - `TRACKER_HTTPS_PORT`：HTTPS 入口
 
 真实域名不应直接提交到仓库；请只写在本机或 VPS 的 `.env` 文件中。
+
+当前 Nginx 配置默认启用 Basic Auth。没有 `NGINX_HTPASSWD_FILE` 或密码文件不存在时，容器不应正常启动；这是为了避免管理面板意外裸露在公网。
+
+## 紧急加固
+
+如果发现管理面板已经暴露在公网，优先按这个顺序处理：
+
+1. 在 VPS 防火墙上临时关闭入口端口，或只允许你的固定 IP/VPN 网段访问。
+2. 创建 `secrets/.htpasswd`，在 `.env` 中配置 `NGINX_HTPASSWD_FILE=./secrets/.htpasswd`。
+3. 重新部署容器：`docker compose up -d --build`。
+4. 用无痕窗口访问面板，确认浏览器弹出用户名/密码框。
+5. 检查 `data/state.json` 是否存在异常数据，必要时从备份恢复。
 
 ## 数据存储
 
