@@ -8,8 +8,21 @@ const EMPTY_STATE = { models: [], experiments: [], hyperparams: [], trainingLogs
 
 app.use(express.json({ limit: '10mb' }));
 
-// 并发写锁
-let writeLock = false;
+// 持久化写入（排队式，不丢数据）
+let writeQueue = Promise.resolve();
+
+function writeState(state) {
+    writeQueue = writeQueue.then(() => {
+        try {
+            const dir = path.dirname(DATA_FILE);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf8');
+        } catch (e) {
+            console.error('保存状态失败:', e.message);
+        }
+    });
+    return writeQueue;
+}
 
 // 读取完整状态
 function readState() {
@@ -21,27 +34,6 @@ function readState() {
         console.error('读取状态失败:', e.message);
     }
     return { ...EMPTY_STATE };
-}
-
-// 写入完整状态（带并发锁）
-function writeState(state, res) {
-    if (writeLock) {
-        res.status(429).json({ error: '正在保存，请稍后' });
-        return false;
-    }
-    writeLock = true;
-    try {
-        const dir = path.dirname(DATA_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf8');
-        return true;
-    } catch (e) {
-        console.error('保存状态失败:', e.message);
-        if (res) res.status(500).json({ error: '保存失败' });
-        return false;
-    } finally {
-        writeLock = false;
-    }
 }
 
 // 允许的实体集合（与前端 DB.KEYS 对应）
@@ -59,9 +51,7 @@ app.get('/api/data', (req, res) => {
 });
 
 app.post('/api/data', (req, res) => {
-    if (writeState(req.body, res)) {
-        res.json({ ok: true });
-    }
+    writeState(req.body).then(() => res.json({ ok: true })).catch(() => res.status(500).json({ error: '保存失败' }));
 });
 
 // ==================== 按实体的 CRUD 接口 ====================
@@ -85,9 +75,7 @@ app.post('/api/data/:entity', (req, res) => {
     const state = readState();
     if (!Array.isArray(state[entity])) state[entity] = [];
     state[entity].push(req.body);
-    if (writeState(state, res)) {
-        res.json({ ok: true, item: req.body });
-    }
+    writeState(state).then(() => res.json({ ok: true, item: req.body })).catch(() => res.status(500).json({ error: '保存失败' }));
 });
 
 // 更新实体中指定 id 的记录
@@ -102,9 +90,7 @@ app.put('/api/data/:entity/:id', (req, res) => {
     const idx = arr.findIndex(item => item.id === id);
     if (idx === -1) return res.status(404).json({ error: '记录不存在' });
     arr[idx] = { ...arr[idx], ...req.body, id };
-    if (writeState(state, res)) {
-        res.json({ ok: true, item: arr[idx] });
-    }
+    writeState(state).then(() => res.json({ ok: true, item: arr[idx] })).catch(() => res.status(500).json({ error: '保存失败' }));
 });
 
 // 删除实体中指定 id 的记录
@@ -121,9 +107,7 @@ app.delete('/api/data/:entity/:id', (req, res) => {
     if (state[entity].length === before) {
         return res.status(404).json({ error: '记录不存在' });
     }
-    if (writeState(state, res)) {
-        res.json({ ok: true });
-    }
+    writeState(state).then(() => res.json({ ok: true })).catch(() => res.status(500).json({ error: '保存失败' }));
 });
 
 // 健康检查
