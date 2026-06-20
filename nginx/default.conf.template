@@ -1,17 +1,17 @@
-# HTTP → HTTPS 跳转
+# HTTP 跳转到 HTTPS
 server {
     listen 80;
-    server_name your-domain.example.com;
-    return 301 https://$host:8443$request_uri;
+    server_name ${TRACKER_DOMAIN};
+    return 301 https://$host:${TRACKER_HTTPS_PORT}$request_uri;
 }
 
 # HTTPS
 server {
     listen 8443 ssl;
-    server_name your-domain.example.com;
+    server_name ${TRACKER_DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/your-domain.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/${TRACKER_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${TRACKER_DOMAIN}/privkey.pem;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;

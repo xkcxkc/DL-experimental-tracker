@@ -4,31 +4,65 @@ const path = require('path');
 
 const app = express();
 const DATA_FILE = '/data/state.json';
-const EMPTY_STATE = { models: [], experiments: [], hyperparams: [], trainingLogs: [], testResults: [] };
+const EMPTY_STATE = { MODELS: [], EXPERIMENTS: [], HYPERPARAMS: [], TRAINING_LOGS: [], TEST_RESULTS: [], TAGS: [] };
+const FIELD_ALIASES = {
+    MODELS: ['MODELS', 'models'],
+    EXPERIMENTS: ['EXPERIMENTS', 'experiments'],
+    HYPERPARAMS: ['HYPERPARAMS', 'hyperparams'],
+    TRAINING_LOGS: ['TRAINING_LOGS', 'trainingLogs'],
+    TEST_RESULTS: ['TEST_RESULTS', 'testResults'],
+    TAGS: ['TAGS', 'tags']
+};
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+
+function normalizeState(state) {
+    const normalized = {};
+    for (const [targetKey, aliases] of Object.entries(FIELD_ALIASES)) {
+        const value = aliases.map(alias => state?.[alias]).find(Array.isArray);
+        normalized[targetKey] = value || [];
+    }
+
+    const resultExperimentIds = new Set(normalized.TEST_RESULTS.map(item => item.experimentId));
+    normalized.EXPERIMENTS = normalized.EXPERIMENTS.map(exp => {
+        if (!exp || typeof exp !== 'object') return exp;
+        const { testResultDetail, testResults, ...cleanExp } = exp;
+        if ((testResultDetail || testResults) && exp.id && !resultExperimentIds.has(exp.id)) {
+            normalized.TEST_RESULTS.push({
+                id: `${exp.id}-test-result`,
+                experimentId: exp.id,
+                summary: testResultDetail?.summary || {},
+                predictions: testResultDetail?.predictions || [],
+                confusionMatrix: testResultDetail?.confusionMatrix || null,
+                results: testResults || [],
+                updatedAt: exp.updatedAt || exp.createdAt || new Date().toISOString()
+            });
+            resultExperimentIds.add(exp.id);
+        }
+        return cleanExp;
+    });
+
+    return normalized;
+}
 
 // 持久化写入（排队式，不丢数据）
 let writeQueue = Promise.resolve();
 
 function writeState(state) {
-    writeQueue = writeQueue.then(() => {
-        try {
-            const dir = path.dirname(DATA_FILE);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf8');
-        } catch (e) {
-            console.error('保存状态失败:', e.message);
-        }
+    const writeOperation = writeQueue.then(() => {
+        const dir = path.dirname(DATA_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(DATA_FILE, JSON.stringify(normalizeState(state), null, 2), 'utf8');
     });
-    return writeQueue;
+    writeQueue = writeOperation.catch(() => {});
+    return writeOperation;
 }
 
 // 读取完整状态
 function readState() {
     try {
         if (fs.existsSync(DATA_FILE)) {
-            return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            return normalizeState(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
         }
     } catch (e) {
         console.error('读取状态失败:', e.message);

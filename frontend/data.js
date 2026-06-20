@@ -101,11 +101,29 @@ const DB = {
     getExperiments(modelId) {
         let exps = this._getAll(this.KEYS.EXPERIMENTS);
         if (modelId !== undefined) exps = exps.filter(exp => exp.modelId === modelId);
-        return exps.sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+        return exps
+            .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+            .map(exp => this._hydrateExperiment(exp));
     },
 
     getExperiment(id) {
-        return this._getById(this.KEYS.EXPERIMENTS, id);
+        return this._hydrateExperiment(this._getById(this.KEYS.EXPERIMENTS, id));
+    },
+
+    _hydrateExperiment(exp) {
+        if (!exp) return exp;
+        const testResult = this.getTestResult(exp.id);
+        if (!testResult) return exp;
+
+        return {
+            ...exp,
+            testResults: testResult.results || exp.testResults || [],
+            testResultDetail: {
+                summary: testResult.summary || {},
+                predictions: testResult.predictions || [],
+                confusionMatrix: testResult.confusionMatrix || null
+            }
+        };
     },
 
     createExperiment(modelId, data) {
@@ -200,10 +218,15 @@ const DB = {
     saveTestResult(experimentId, data) {
         const all = this._getAll(this.KEYS.TEST_RESULTS);
         const idx = all.findIndex(r => r.experimentId === experimentId);
+        const detail = data.testResultDetail || data.detail || data;
         const record = {
             id: idx >= 0 ? all[idx].id : this.uuid(),
             experimentId,
-            ...data
+            summary: detail.summary || {},
+            predictions: detail.predictions || [],
+            confusionMatrix: detail.confusionMatrix || null,
+            results: data.testResults || data.results || [],
+            updatedAt: new Date().toISOString()
         };
         if (idx >= 0) {
             all[idx] = record;
@@ -251,7 +274,8 @@ const DB = {
 
         const summary = this.getExperimentSummary(experimentId);
         const log = this.getTrainingLog(experimentId);
-        const result = exp.testResultDetail || this.getTestResult(experimentId);
+        const storedResult = this.getTestResult(experimentId);
+        const result = storedResult || exp.testResultDetail;
 
         return {
             experiment: exp,
@@ -392,6 +416,18 @@ const StorageAdapter = {
         }
     },
 
+    _normalizeServerState(serverState) {
+        const normalized = {};
+        for (const [serverKey, frontendKey] of Object.entries(DB.KEYS)) {
+            if (Array.isArray(serverState[serverKey])) {
+                normalized[serverKey] = serverState[serverKey];
+            } else if (Array.isArray(serverState[frontendKey])) {
+                normalized[serverKey] = serverState[frontendKey];
+            }
+        }
+        return normalized;
+    },
+
     // 前端缓存 key → 服务器 key 映射
     _SERVER_KEYS: null,
     _getServerKeys() {
@@ -413,11 +449,12 @@ const StorageAdapter = {
             for (const [frontendKey, serverKey] of Object.entries(serverKeys)) {
                 serverData[serverKey] = this._cache[frontendKey] || [];
             }
-            await fetch(this._apiUrl, {
+            const res = await fetch(this._apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(serverData)
             });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
         } catch (e) {
             console.warn('推送失败:', e.message);
         }
@@ -431,10 +468,27 @@ const StorageAdapter = {
             const localItems = this._mode === 'remote'
                 ? (this._cache[key] || [])
                 : JSON.parse(localStorage.getItem(key) || '[]');
-            const localIds = new Set(localItems.map(i => i.id));
-            const missing = serverItems.filter(i => !localIds.has(i.id));
-            if (missing.length > 0) {
-                const merged = [...localItems, ...missing];
+            const localById = new Map(localItems.map(item => [item.id, item]));
+            let changed = false;
+
+            for (const serverItem of serverItems) {
+                const localItem = localById.get(serverItem.id);
+                if (!localItem) {
+                    localById.set(serverItem.id, serverItem);
+                    changed = true;
+                    continue;
+                }
+
+                const serverTime = Date.parse(serverItem.updatedAt || serverItem.createdAt || 0);
+                const localTime = Date.parse(localItem.updatedAt || localItem.createdAt || 0);
+                if (!localTime || serverTime >= localTime) {
+                    localById.set(serverItem.id, serverItem);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                const merged = [...localById.values()];
                 if (this._mode === 'remote') {
                     this._cache[key] = merged;
                 } else {
@@ -450,21 +504,12 @@ const StorageAdapter = {
         try {
             const res = await fetch(this._apiUrl);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const serverState = await res.json();
+            const serverState = this._normalizeServerState(await res.json());
             if (serverState && typeof serverState === 'object' && Object.keys(serverState).length > 0) {
-                // 将服务器键名（MODELS/EXPERIMENTS 等）转换为前端格式（dlt_models 等）
-                const frontendState = {};
-                for (const [frontendKey, serverKey] of Object.entries(DB.KEYS)) {
-                    if (serverState[frontendKey] !== undefined) {
-                        frontendState[serverKey] = serverState[frontendKey];
-                    }
-                }
-                if (Object.keys(frontendState).length > 0) {
-                    this._mergeState(frontendState);
-                    Data.refresh();
-                    if (typeof app !== 'undefined' && app.currentView) {
-                        app.navigate(app.currentView);
-                    }
+                this._mergeState(serverState);
+                Data.refresh();
+                if (typeof app !== 'undefined' && app.currentView) {
+                    app.navigate(app.currentView);
                 }
                 this._lastPull = Date.now();
             }
@@ -521,8 +566,16 @@ const Data = {
     },
 
     updateExperiment(id, data) {
-        DB.updateExperiment(id, data);
+        const { testResultDetail, testResults, ...experimentUpdates } = data;
+        DB.updateExperiment(id, experimentUpdates);
         if (data.hyperParams) DB.saveHyperParams(id, data.hyperParams);
+        if (testResultDetail !== undefined || testResults !== undefined) {
+            const existing = DB.getTestResult(id);
+            DB.saveTestResult(id, {
+                testResultDetail: testResultDetail !== undefined ? testResultDetail : existing,
+                testResults: testResults !== undefined ? testResults : (existing?.results || [])
+            });
+        }
         this.experiments[id] = DB.getExperiment(id);
     },
 
